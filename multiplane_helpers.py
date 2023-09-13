@@ -1,4 +1,6 @@
 import torch
+import numpy as np
+import time
 
 class RenderNetwork(torch.nn.Module):
     def __init__(
@@ -139,7 +141,23 @@ class ImagePlanes(torch.nn.Module):
         ps = self.K_matrices @ self.pose_matrices @ points.T
         pixels = (ps/ps[:,None,2])[:,0:2,:]
         pixels = pixels / self.size
-        pixels = torch.clamp(pixels, 0, 1)
+        pixels = torch.clamp(pixels, 0, 1) # 0,0025
+        new_ = pixels[0]
+
+        new_coords = new_.permute(1, 0)
+        
+        start = time.time()
+        x = new_coords[:, 0].detach().cpu().numpy()
+        tmp = time.time()
+
+        xx = np.linspace(x - 0.0025, x + 0.0025, 5)  
+        stop = time.time()
+        print("Time mid", tmp - start)
+        print("Time", stop - start)
+        print("Shape", xx.shape)
+
+        print("test")
+
         pixels = pixels * 2.0 - 1.0
         pixels = pixels.permute(0,2,1)
 
