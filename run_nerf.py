@@ -902,19 +902,21 @@ def train():
             torch.save({
                 'global_step': global_step,
                 'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
-                'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
+                # 'network_fine_state_dict': render_kwargs_train['network_fine'].state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
             }, path)
             print('Saved checkpoints at', path)
 
-        if (i%args.i_video==0 and i > 0):
-            # Turn on testing mode
-            with torch.no_grad():
-                rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test])
-            print('Done, saving', rgbs.shape, disps.shape)
-            moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
-            imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
+        # if (i%args.i_video==0 and i > 0):
+        #     testsavedir = os.path.join(basedir, expname, 'vid_frames_{:06d}'.format(i))
+        #     os.makedirs(testsavedir, exist_ok=True)
+        #     # Turn on testing mode
+        #     with torch.no_grad():
+        #         rgbs, disps = render_path(render_poses, hwf, K, 524288, render_kwargs_test, savedir=testsavedir, gt_imgs=images[i_test], render_factor=4)
+        #     print('Done, saving', rgbs.shape, disps.shape)
+        #     moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
+        #     imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
+        #     imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
 
         if (i%args.i_testset==0):
             testsavedir = os.path.join(basedir, expname, 'testset_metrics_{:06d}'.format(i))
