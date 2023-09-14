@@ -1,4 +1,6 @@
 import torch
+import numpy as np
+
 
 class RenderNetwork(torch.nn.Module):
     def __init__(
@@ -148,22 +150,26 @@ class ImagePlanes(torch.nn.Module):
         P = 10
 
         for img in range(self.image_plane.shape[0]):
-            patches = []
             image_plane = self.image_plane[img]
             image_plane_border = torch.nn.functional.pad(image_plane, pad=(P, P, P, P), mode="constant", value=0)
-
+            image_plane_border = image_plane_border.permute(1, 2, 0)
+            image_plane_border = image_plane_border.detach().cpu().numpy()
             coord = pixels[img]
+            coord = coord.cpu().numpy()
 
             x = (coord[:, 0] + P - 2)
             y = (coord[:, 1] + P - 2)
             x1 = (coord[:, 0] + P - 2 + 5)
             y1 = (coord[:, 1] + P - 2 + 5)
             
-            patches = tuple(image_plane_border[:, x_:x1_, y_:y1_] for x_, y_, x1_, y1_ in zip(x, y, x1, y1))
-            patches = torch.stack(patches)
+            patches = [image_plane_border[x_:x1_, y_:y1_, :] for x_, y_, x1_, y1_ in zip(x, y, x1, y1)]
+            patches = np.stack(patches, axis=0)
+            # patches = torch.stack(patches)
+            patches = torch.from_numpy(patches)
+            patches = patches.permute(0, 3, 1, 2).to("cuda")
             feats.append(patches)
 
-        feats = torch.stack(feats).squeeze(1)
+        feats = torch.stack(feats).squeeze(1) # 500 000 * 25 * 3
         pixels = pixels.permute(1,0,2)
 
         pixels = pixels.flatten(1)
