@@ -9,7 +9,7 @@ class RenderNetwork(torch.nn.Module):
         dir_count
     ):
         super().__init__()
-        self.input_size = 3*5*5*input_size + input_size*2
+        self.input_size = 3*1*1*input_size + input_size*2
         self.layers_main = torch.nn.Sequential(
               torch.nn.Linear(self.input_size, 256),
               torch.nn.ReLU(),
@@ -148,6 +148,8 @@ class ImagePlanes(torch.nn.Module):
         feats = []
 
         P = 10
+        CROP_SIZE = 1
+        CROP_STEP = CROP_SIZE // 2
 
         for img in range(self.image_plane.shape[0]):
             image_plane = self.image_plane[img]
@@ -157,10 +159,10 @@ class ImagePlanes(torch.nn.Module):
             coord = pixels[img]
             coord = coord.cpu().numpy()
 
-            x = (coord[:, 0] + P - 2)
-            y = (coord[:, 1] + P - 2)
-            x1 = (coord[:, 0] + P - 2 + 5)
-            y1 = (coord[:, 1] + P - 2 + 5)
+            x = (coord[:, 0] + P - CROP_STEP)
+            y = (coord[:, 1] + P - CROP_STEP)
+            x1 = (coord[:, 0] + P + CROP_STEP + 1) # Slicing
+            y1 = (coord[:, 1] + P + CROP_STEP + 1)
             
             patches = [image_plane_border[x_:x1_, y_:y1_, :] for x_, y_, x1_, y1_ in zip(x, y, x1, y1)]
             patches = np.stack(patches, axis=0)
