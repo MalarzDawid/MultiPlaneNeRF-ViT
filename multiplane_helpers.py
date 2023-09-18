@@ -1,5 +1,9 @@
 import torch
 
+PADDING = 10
+CROP_SIZE = 5
+CROP_STEP =  CROP_SIZE // 2
+
 class RenderNetwork(torch.nn.Module):
     def __init__(
         self,
@@ -7,7 +11,7 @@ class RenderNetwork(torch.nn.Module):
         dir_count
     ):
         super().__init__()
-        self.input_size = 3*5*5*input_size + input_size*2
+        self.input_size = 3*CROP_SIZE*CROP_SIZE*input_size + input_size*2
         self.layers_main = torch.nn.Sequential(
               torch.nn.Linear(self.input_size, 256),
               torch.nn.ReLU(),
@@ -135,39 +139,39 @@ class ImagePlanes(torch.nn.Module):
             points = points[0]
 
         points = torch.concat([points, torch.ones(points.shape[0], 1).to(points.device)], 1).to(points.device)
-        ps = self.K_matrices @ self.pose_matrices @ points.T # (x, y, z) -> (x, y) 
-        pixels = (ps/ps[:,None,2])[:,0:2,:]
+        ps = self.K_matrices @ self.pose_matrices @ points.T # (x, y, z) -> (x, y, w) 
+        pixels = (ps/ps[:,None,2])[:,0:2,:] # remove w
         pixels = pixels / self.size
-        pixels = torch.clamp(pixels, 0, 1)
-        pixels = pixels * self.size
-        pixels = pixels.int()
-        pixels = pixels.permute(0,2,1)
+        pixels = torch.clamp(pixels, 0, 1) 
+        pixels = pixels * self.size 
+        pixels = pixels.permute(0,2,1) 
 
         feats = []
-
-        P = 10
-
         for img in range(self.image_plane.shape[0]):
-            patches = []
             image_plane = self.image_plane[img]
-            image_plane_border = torch.nn.functional.pad(image_plane, pad=(P, P, P, P), mode="constant", value=0)
-
+            image_plane_border = torch.nn.functional.pad(image_plane, pad=(PADDING, PADDING, PADDING, PADDING), mode="constant", value=255)
             coord = pixels[img]
-
-            x = (coord[:, 0] + P - 2)
-            y = (coord[:, 1] + P - 2)
-            x1 = (coord[:, 0] + P - 2 + 5)
-            y1 = (coord[:, 1] + P - 2 + 5)
-            
-            patches = tuple(image_plane_border[:, x_:x1_, y_:y1_] for x_, y_, x1_, y1_ in zip(x, y, x1, y1))
-            patches = torch.stack(patches)
+            x = (coord[:, 0] + PADDING - CROP_STEP)
+            y = (coord[:, 1] + PADDING - CROP_STEP)
+            patches = []
+            for r in range(CROP_SIZE):
+                x_i = x + r
+                patches.append(
+                    torch.stack(
+                        [image_plane_border[:, x_i.long(), (y + c).long()].T for c in range(CROP_SIZE)],
+                        dim=-1
+                    )
+                )
+            patches = torch.stack(patches, dim=-2)
             feats.append(patches)
 
         feats = torch.stack(feats).squeeze(1)
+
         pixels = pixels.permute(1,0,2)
 
         pixels = pixels.flatten(1)
-
+        pixels = pixels / self.size
+        pixels = pixels * 2.0 - 1.0
         feats = feats.permute(1,0,2,3,4)
         feats = feats.flatten(1)
         feats = feats.unsqueeze(0)
