@@ -1,8 +1,38 @@
 import torch
 
+INPUT_CONV_CH = 5
 PADDING = 10
 CROP_SIZE = 5
 CROP_STEP =  CROP_SIZE // 2
+
+
+class ConvStage(torch.nn.Module):
+    def __init__(self, input_size: int = 5, output_size: int = 500):
+        super().__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+
+        self.block = torch.nn.Sequential(
+            torch.nn.Conv2d(self.input_size, 8, (3, 3)),
+            torch.nn.ReLU(),
+            torch.nn.MaxPool2d((2, 2)),
+            torch.nn.Conv2d(8, 16, (3, 3)),
+            torch.nn.ReLU(),
+            torch.nn.MaxPool2d((2, 2)),
+            torch.nn.Conv2d(16, 32, (3, 3)),
+            torch.nn.ReLU(),
+        )
+        self.l1 = torch.nn.Linear(32 * 9 * 9, 1024) # 5184 -> 1024 -> 512 -> 500
+        self.l2 = torch.nn.Linear(1024, 512)
+        self.l3 = torch.nn.Linear(512, self.output_size)
+    def forward(self, x):
+        x = self.block(x)
+        x = x.view(x.size(0), -1)
+        x = self.l1(x)
+        x = self.l2(x)
+        x = self.l3(x)
+        return x
+
 
 class RenderNetwork(torch.nn.Module):
     def __init__(
@@ -11,7 +41,7 @@ class RenderNetwork(torch.nn.Module):
         dir_count
     ):
         super().__init__()
-        self.input_size = 3*CROP_SIZE*CROP_SIZE*input_size + input_size*2
+        self.input_size = 3 * input_size + input_size*2
         self.layers_main = torch.nn.Sequential(
               torch.nn.Linear(self.input_size, 256),
               torch.nn.ReLU(),
@@ -112,6 +142,7 @@ class ImagePlanes(torch.nn.Module):
         self.pose_matrices = []
         self.K_matrices = []
         self.images = []
+        self.conv_stage = ConvStage(INPUT_CONV_CH, INPUT_CONV_CH * count)
 
         self.focal = focal
         for i in range(min(count, poses.shape[0])):
@@ -142,15 +173,21 @@ class ImagePlanes(torch.nn.Module):
         ps = self.K_matrices @ self.pose_matrices @ points.T # (x, y, z) -> (x, y, w) 
         pixels = (ps/ps[:,None,2])[:,0:2,:] # remove w
         pixels = pixels / self.size
-        pixels = torch.clamp(pixels, 0, 1) 
+        pixels = torch.clamp(pixels, 0, 1)
+        coord_norm = pixels * 2.0 - 1.0
         pixels = pixels * self.size 
         pixels = pixels.permute(0,2,1) 
+        coord_norm = coord_norm.permute(0,2,1) 
 
         feats = []
         for img in range(self.image_plane.shape[0]):
-            image_plane = self.image_plane[img]
+            # image_plane = self.image_plane[img]
+            image_plane = torch.zeros((3, 800, 800))
+            image_plane[1, :, :] += 1.0
+            image_plane[2, :, :] += 2.0
             image_plane_border = torch.nn.functional.pad(image_plane, pad=(PADDING, PADDING, PADDING, PADDING), mode="constant", value=255)
             coord = pixels[img]
+            coord_norm_img = coord_norm[img]
             x = (coord[:, 0] + PADDING - CROP_STEP)
             y = (coord[:, 1] + PADDING - CROP_STEP)
             patches = []
@@ -162,21 +199,27 @@ class ImagePlanes(torch.nn.Module):
                         dim=-1
                     )
                 )
+            
+            
             patches = torch.stack(patches, dim=-2)
+            torch_ones = torch.ones((coord.size(0), 1, CROP_SIZE, CROP_SIZE))
+            for i in range(2):
+                patches = torch.cat((patches, torch_ones), dim=1)
+                patches[:, 3 + i, :, :] =  patches[:, 3 + i, :, :] * coord_norm_img[:, i].view(-1, 1, 1)
             feats.append(patches)
 
         feats = torch.stack(feats).squeeze(1)
+        feats = feats.permute(1, 0, 2, 3, 4)
+        # TODO -> 10 
+        feats = feats.reshape(feats.size(0), 10, 10, 5, CROP_SIZE, CROP_SIZE)
+        feats = feats.permute(0, 3, 1, 4, 2, 5)
+        feats = feats.flatten(4)
+        feats = feats.permute(0, 1, 4, 2, 3)
+        feats = feats.flatten(3)
 
-        pixels = pixels.permute(1,0,2)
-
-        pixels = pixels.flatten(1)
-        pixels = pixels / self.size
-        pixels = pixels * 2.0 - 1.0
-        feats = feats.permute(1,0,2,3,4)
-        feats = feats.flatten(1)
-        feats = feats.unsqueeze(0)
-        feats = torch.cat((feats[0], pixels), 1)
-        return feats
+        conv_out = self.conv_stage(feats)
+        
+        return conv_out
     
     
 class LLFFImagePlanes(torch.nn.Module):
