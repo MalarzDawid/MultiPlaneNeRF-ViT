@@ -1,4 +1,4 @@
-expname = blender_paper_lego_mi
+expname = conv_10k_5kernel_5patch_
 basedir = ./logs
 datadir = ./data/nerf_synthetic/lego
 dataset_type = blender
@@ -17,3 +17,8 @@ precrop_iters = 750
 precrop_frac = 0.5
 
 half_res = False
+i_weights = 1000
+i_testset = 1000
+epochs = 2000
+neptune_project = gmum-malarz/MultiPlaneNeRF-ViT
+

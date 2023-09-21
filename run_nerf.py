@@ -1,12 +1,12 @@
 import os, sys
 import numpy as np
 import imageio
-import json
-import random
+import neptune
 import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from PIL import Image
 from tqdm import tqdm, trange
 
 import matplotlib.pyplot as plt
@@ -138,7 +138,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     return ret_list + [ret_dict]
 
 
-def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0, calculate_metrics=False):
+def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0, calculate_metrics=False, logger=None):
     H, W, focal = hwf
 
     if render_factor!=0:
@@ -152,7 +152,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     t = time.time()
     for i, c2w in enumerate(tqdm(render_poses)):
-        print(i, time.time() - t)
+        print("Time:", i, time.time() - t)
         t = time.time()
         rgb, disp, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
@@ -162,6 +162,13 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
             rgb8 = to8b(rgbs[-1])
             filename = os.path.join(savedir, '{:03d}.png'.format(i))
             imageio.imwrite(filename, rgb8)
+
+        if logger:
+            logger_path = savedir.split("/")[-1]
+            epoch_num = logger_path.split("_")[-1]
+            gt_img, pred_img = to8b(gt_imgs[i]), to8b(rgbs[-1])
+            img = Image.fromarray(np.hstack((gt_img, pred_img)))
+            logger[f"images/{epoch_num}"].append(img, step=i)
 
     rgbs = np.stack(rgbs, 0)
     disps = np.stack(disps, 0)
@@ -177,6 +184,10 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
         gts = np.array(gt_imgs)
     
         p = -10. * np.log10(np.mean(np.square(rgbss - gts)))
+        if logger:
+            logger["metrics/psnr"].upload(p)
+            logger["metrics/ssim"].upload(img_ssim)
+            logger["metrics/lpips"].upload(img_lpips)
         print(" CALCULATED PSNR FOR TESTSET")
         with open(os.path.join(savedir, 'result.txt'), 'w') as f:
             f.write(f"psnr: {p}\nssim: {img_ssim}\nlpips: {img_lpips}")
@@ -575,6 +586,8 @@ def config_parser():
                         help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
 
     # training options
+    parser.add_argument("--epochs", type=int, default=100,
+                        help='epochs')
     parser.add_argument("--precrop_iters", type=int, default=0,
                         help='number of steps to train on central crops')
     parser.add_argument("--precrop_frac", type=float,
@@ -626,6 +639,10 @@ def config_parser():
     
     parser.add_argument("--mi_count",   type=int, default=100, 
                         help='mi count')
+    # logger
+    parser.add_argument("--neptune_project",  type=str, default=None, 
+                        help="neptune project")
+
 
     return parser
 
@@ -634,6 +651,13 @@ def train():
 
     parser = config_parser()
     args = parser.parse_args()
+    
+    # Logger
+    run = None
+    if args.neptune_project:
+        run = neptune.init_run(
+            project=args.neptune_project,
+        )
 
     # Load data
     K = None
@@ -802,8 +826,7 @@ def train():
     if use_batching:
         rays_rgb = torch.Tensor(rays_rgb).to(device)
 
-
-    N_iters = 200000 + 1
+    N_iters = args.epochs + 1 if run else 200001
     print('Begin')
     print('TRAIN views are', i_train)
     print('TEST views are', i_test)
@@ -873,6 +896,11 @@ def train():
         loss = img_loss
         psnr = mse2psnr(img_loss)
 
+        # Log metrics
+        if run:
+            run["train/loss"].append(loss)
+            run["train/psnr"].append(psnr)
+
         if 'rgb0' in extras:
             img_loss0 = img2mse(extras['rgb0'], target_s)
             loss = loss + img_loss0
@@ -906,6 +934,8 @@ def train():
                 'optimizer_state_dict': optimizer.state_dict(),
             }, path)
             print('Saved checkpoints at', path)
+            if run:
+                run["model/binary"].upload(path)
 
         # if (i%args.i_video==0 and i > 0):
         #     testsavedir = os.path.join(basedir, expname, 'vid_frames_{:06d}'.format(i))
@@ -923,7 +953,10 @@ def train():
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', poses[i_test].shape)
             with torch.no_grad():
-                render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir, calculate_metrics=True)
+                render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir, calculate_metrics=True, logger=run)
+                
+                if run:
+                    pass
             print('Saved test set')
 
     
