@@ -187,10 +187,7 @@ class ImagePlanes(torch.nn.Module):
 
         feats = []
         for img in range(self.image_plane.shape[0]):
-            # image_plane = self.image_plane[img]
-            image_plane = torch.zeros((3, 800, 800))
-            image_plane[1, :, :] += 1.0
-            image_plane[2, :, :] += 2.0
+            image_plane = self.image_plane[img]
             image_plane_border = torch.nn.functional.pad(
                 image_plane,
                 pad=(PADDING, PADDING, PADDING, PADDING),
@@ -214,9 +211,6 @@ class ImagePlanes(torch.nn.Module):
                     )
                 )
             
-            
-            
-
             
             patches = torch.stack(patches, dim=-2)
             torch_ones = torch.ones((coord.size(0), 1, CROP_SIZE, CROP_SIZE))
@@ -311,6 +305,7 @@ class LLFFImagePlanes(torch.nn.Module):
         pixels = pixels.flatten(1)
         feats = feats.permute(2, 3, 0, 1)
         feats = feats.flatten(2)
+
         feats = torch.cat((feats[0], pixels), 1)
         return feats
 
