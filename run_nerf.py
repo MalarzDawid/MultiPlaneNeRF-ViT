@@ -637,7 +637,7 @@ def config_parser():
     parser.add_argument("--divide_fac",   type=int, default=1, 
                         help='divide img size by this number')
     
-    parser.add_argument("--mi_count",   type=int, default=100, 
+    parser.add_argument("--mi_count",   type=int, default=8, 
                         help='mi count')
     # logger
     parser.add_argument("--neptune_project",  type=str, default=None, 
@@ -654,10 +654,10 @@ def train():
     
     # Logger
     run = None
-    if args.neptune_project:
-        run = neptune.init_run(
-            project=args.neptune_project,
-        )
+    # if args.neptune_project:
+    #     run = neptune.init_run(
+    #         project=args.neptune_project,
+    #     )
 
     # Load data
     K = None

@@ -1,39 +1,50 @@
 import torch
 import torchvision
+from vit import VisionTransformer
 
 INPUT_CONV_CH = 5
 PADDING = 10
 CROP_SIZE = 5
 CROP_STEP = CROP_SIZE // 2
 
+class Args:
+    def __init__(self) -> None:
+        self.n_channels = 3
+        self.embed_dim = 768
+        self.patch_size = CROP_SIZE
+        self.img_size = None
+        self.n_attention_heads = 4
+        self.forward_mul = 2
+        self.n_classes = None
+        self.n_layers = 6
 
-class ConvStage(torch.nn.Module):
-    def __init__(self, input_size: int = 5, output_size: int = 500):
-        super().__init__()
-        self.input_size = input_size
-        self.output_size = output_size
+# class ConvStage(torch.nn.Module):
+#     def __init__(self, input_size: int = 5, output_size: int = 500):
+#         super().__init__()
+#         self.input_size = input_size
+#         self.output_size = output_size
 
-        self.block = torch.nn.Sequential(
-            torch.nn.Conv2d(self.input_size, 8, (3, 3)),
-            torch.nn.ReLU(),
-            torch.nn.MaxPool2d((2, 2)),
-            torch.nn.Conv2d(8, 16, (3, 3)),
-            torch.nn.ReLU(),
-            torch.nn.MaxPool2d((2, 2)),
-            torch.nn.Conv2d(16, 32, (3, 3)),
-            torch.nn.ReLU(),
-        )
-        self.l1 = torch.nn.Linear(32 * 9 * 9, 1024)  # 5184 -> 1024 -> 512 -> 500
-        self.l2 = torch.nn.Linear(1024, 512)
-        self.l3 = torch.nn.Linear(512, self.output_size)
+#         self.block = torch.nn.Sequential(
+#             torch.nn.Conv2d(self.input_size, 8, (3, 3)),
+#             torch.nn.ReLU(),
+#             torch.nn.MaxPool2d((2, 2)),
+#             torch.nn.Conv2d(8, 16, (3, 3)),
+#             torch.nn.ReLU(),
+#             torch.nn.MaxPool2d((2, 2)),
+#             torch.nn.Conv2d(16, 32, (3, 3)),
+#             torch.nn.ReLU(),
+#         )
+#         self.l1 = torch.nn.Linear(32 * 9 * 9, 1024)  # 5184 -> 1024 -> 512 -> 500
+#         self.l2 = torch.nn.Linear(1024, 512)
+#         self.l3 = torch.nn.Linear(512, self.output_size)
 
-    def forward(self, x):
-        x = self.block(x)
-        x = x.view(x.size(0), -1)
-        x = self.l1(x)
-        x = self.l2(x)
-        x = self.l3(x)
-        return x
+#     def forward(self, x):
+#         x = self.block(x)
+#         x = x.view(x.size(0), -1)
+#         x = self.l1(x)
+#         x = self.l2(x)
+#         x = self.l3(x)
+#         return x
 
 
 class RenderNetwork(torch.nn.Module):
@@ -138,8 +149,7 @@ class ImagePlanes(torch.nn.Module):
         self.pose_matrices = []
         self.K_matrices = []
         self.images = []
-        self.conv_stage = ConvStage(INPUT_CONV_CH, INPUT_CONV_CH * count)
-
+        # self.conv_stage = ConvStage(INPUT_CONV_CH, INPUT_CONV_CH * count)
         self.focal = focal
         for i in range(min(count, poses.shape[0])):
             M = poses[i]
@@ -169,7 +179,7 @@ class ImagePlanes(torch.nn.Module):
         self.K_matrices = torch.stack(self.K_matrices).to(device)
         self.image_plane = torch.stack(self.images).to(device)
 
-    def forward(self, points=None):
+    def forward(self, points=None, transformer=None):
         if points.shape[0] == 1:
             points = points[0]
 
@@ -220,17 +230,22 @@ class ImagePlanes(torch.nn.Module):
                     :, i
                 ].view(-1, 1, 1)
             feats.append(patches)
-
+        # img: (100, 32k, 5, 5, 3) # coord: (100, 32k, 2)
+        # img: (100, 32k, 96) coord: (100, 32k, 96)
+        # [8, 32768, 5, 5, 5]
         feats = torch.stack(feats).squeeze(1)
-        feats = feats.permute(1, 0, 2, 3, 4)
-        # TODO -> 10
-        feats = feats.reshape(feats.size(0), 10, 10, 5, CROP_SIZE, CROP_SIZE)
-        feats = feats.permute(0, 3, 1, 4, 2, 5)
-        feats = feats.flatten(4)
-        feats = feats.permute(0, 1, 4, 2, 3)
-        feats = feats.flatten(3)
-
-        conv_out = self.conv_stage(feats)
+        coord_norm_flat = coord_norm.reshape(coord_norm.size(0)*coord_norm.size(1), 2)
+        feats = feats.reshape(feats.size(0)*feats.size(1), CROP_SIZE, CROP_SIZE, 5)
+        feats = feats.permute(0, 3, 1, 2)
+        # feats = feats.permute(1, 0, 2, 3, 4)
+        # # TODO -> 10
+        # feats = feats.reshape(feats.size(0), 10, 10, 5, CROP_SIZE, CROP_SIZE)
+        # feats = feats.permute(0, 3, 1, 4, 2, 5)
+        # feats = feats.flatten(4)
+        # feats = feats.permute(0, 1, 4, 2, 3)
+        # feats = feats.flatten(3)
+        # 32k, 3, 5, 5
+        conv_out = transformer(feats, coord_norm_flat)
 
         return conv_out
 
@@ -339,7 +354,9 @@ class MultiImageNeRF(torch.nn.Module):
         super(MultiImageNeRF, self).__init__()
         self.image_plane = image_plane
         self.render_network = RenderNetwork(count, dir_count)
-
+        self.args = Args()
+        self.args.n_classes = 3 * count + count * 2
+        self.transformer =  VisionTransformer(self.args)
         self.input_ch_views = dir_count
 
     def parameters(self):
@@ -347,7 +364,7 @@ class MultiImageNeRF(torch.nn.Module):
 
     def forward(self, x):
         input_pts, input_views = torch.split(x, [3, self.input_ch_views], dim=-1)
-        x = self.image_plane(input_pts)
+        x = self.image_plane(input_pts, self.transformer)
         return self.render_network(x, input_views)
 
 
