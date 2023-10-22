@@ -10,7 +10,7 @@ CROP_STEP = CROP_SIZE // 2
 class Args:
     def __init__(self) -> None:
         self.n_channels = 3
-        self.embed_dim = 768
+        self.embed_dim = 700
         self.patch_size = CROP_SIZE
         self.img_size = None
         self.n_attention_heads = 4
@@ -223,20 +223,21 @@ class ImagePlanes(torch.nn.Module):
             
             
             patches = torch.stack(patches, dim=-2)
-            torch_ones = torch.ones((coord.size(0), 1, CROP_SIZE, CROP_SIZE))
-            for i in range(2):
-                patches = torch.cat((patches, torch_ones), dim=1)
-                patches[:, 3 + i, :, :] = patches[:, 3 + i, :, :] * coord_norm_img[
-                    :, i
-                ].view(-1, 1, 1)
-            feats.append(patches)
+            # torch_ones = torch.ones((coord.size(0), 1, CROP_SIZE, CROP_SIZE))
+            # for i in range(2):
+            #     patches = torch.cat((patches, torch_ones), dim=1)
+            #     patches[:, 3 + i, :, :] = patches[:, 3 + i, :, :] * coord_norm_img[
+            #         :, i
+            #     ].view(-1, 1, 1)
+            conv_out = transformer(patches, coord_norm_img)
+            feats.append(conv_out)
         # img: (100, 32k, 5, 5, 3) # coord: (100, 32k, 2)
         # img: (100, 32k, 96) coord: (100, 32k, 96)
         # [8, 32768, 5, 5, 5]
         feats = torch.stack(feats).squeeze(1)
-        coord_norm_flat = coord_norm.reshape(coord_norm.size(0)*coord_norm.size(1), 2)
-        feats = feats.reshape(feats.size(0)*feats.size(1), CROP_SIZE, CROP_SIZE, 5)
-        feats = feats.permute(0, 3, 1, 2)
+        # coord_norm_flat = coord_norm.reshape(coord_norm.size(0)*coord_norm.size(1), 2)
+        # feats = feats.reshape(feats.size(0)*feats.size(1), CROP_SIZE, CROP_SIZE, 3)
+        # feats = feats.permute(0, 3, 1, 2)
         # feats = feats.permute(1, 0, 2, 3, 4)
         # # TODO -> 10
         # feats = feats.reshape(feats.size(0), 10, 10, 5, CROP_SIZE, CROP_SIZE)
@@ -245,7 +246,8 @@ class ImagePlanes(torch.nn.Module):
         # feats = feats.permute(0, 1, 4, 2, 3)
         # feats = feats.flatten(3)
         # 32k, 3, 5, 5
-        conv_out = transformer(feats, coord_norm_flat)
+        # for
+        # print(feats)
 
         return conv_out
 
@@ -356,6 +358,8 @@ class MultiImageNeRF(torch.nn.Module):
         self.render_network = RenderNetwork(count, dir_count)
         self.args = Args()
         self.args.n_classes = 3 * count + count * 2
+        self.args.N_samples = 32
+        self.args.N_rand = 128
         self.transformer =  VisionTransformer(self.args)
         self.input_ch_views = dir_count
 

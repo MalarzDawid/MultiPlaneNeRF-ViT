@@ -19,21 +19,25 @@ class EmbedLayer(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
-        self.conv1 = nn.Conv2d(5, args.embed_dim, kernel_size=args.patch_size, stride=args.patch_size)  # Pixel Encoding
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, args.embed_dim), requires_grad=True)  # Cls Token
-        self.pos_embedding = nn.Parameter(torch.zeros(1,  262144 + 1, args.embed_dim), requires_grad=True)  # Positional Embedding
-        # self.pos_xy = nn.Parameter(torch.zeros(1, (50 // args.patch_size) ** 2 + 1, args.embed_dim), requires_grad=True)  # Positional Embedding
+        self.conv1 = nn.Conv2d(args.n_channels, args.embed_dim - 2, kernel_size=5, stride=5)  # Pixel Encoding
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, args.embed_dim - 2), requires_grad=True)  # Cls Token
+        self.pos_embedding = nn.Parameter(torch.zeros(1, (args.N_samples * args.N_rand) + 1, args.embed_dim - 2), requires_grad=True)  # Positional Embedding
+        self.coord_embedding = nn.Parameter(torch.zeros(1, (args.N_samples * args.N_rand), 2), requires_grad=True)
 
-
-    def forward(self, x, xy):
+    def forward(self, x, coords):
         x = self.conv1(x)  # B C IH IW -> B E IH/P IW/P (Embedding the patches)
-        x = x.flatten(1).unsqueeze(0) # (1, 26k, 768), (26k, 2)
-
         # x = x.reshape([x.shape[0], self.args.embed_dim, -1])  # B E IH/P IW/P -> B E S (Flattening the patches)
+        x = x.flatten(1).unsqueeze(0)
+        coord_emb = self.coord_embedding + coords.unsqueeze(0)
+        coord_emb = torch.cat((torch.zeros(1, 1, 2).to(coord_emb.device), coord_emb), dim=1)
+
         # x = x.transpose(1, 2)  # B E S -> B S E 
         x = torch.cat((torch.repeat_interleave(self.cls_token, x.shape[0], 0), x), dim=1)  # Adding classification token at the start of every sequence
         x = x + self.pos_embedding  # Adding positional embedding
+        x = torch.cat((x, coord_emb), dim=2)  # Concatenate coordinate embeddings to the sequences
+
         return x
+
 
 
 class SelfAttention(nn.Module):
@@ -93,7 +97,7 @@ class Classifier(nn.Module):
         super().__init__()
         self.fc1 = nn.Linear(args.embed_dim, args.embed_dim)
         self.activation = nn.Tanh()
-        self.fc2 = nn.Linear(args.embed_dim, args.n_classes)
+        self.fc2 = nn.Linear(args.embed_dim, 40)
 
     def forward(self, x):
         x = x[:, 0, :]  # Get CLS token
