@@ -19,23 +19,29 @@ class EmbedLayer(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
-        self.conv1 = nn.Conv2d(args.n_channels, args.embed_dim - 2, kernel_size=5, stride=5)  # Pixel Encoding
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, args.embed_dim - 2), requires_grad=True)  # Cls Token
-        self.pos_embedding = nn.Parameter(torch.zeros(1, (args.N_samples * args.N_rand) + 1, args.embed_dim - 2), requires_grad=True)  # Positional Embedding
-        self.coord_embedding = nn.Parameter(torch.zeros(1, (args.N_samples * args.N_rand), 2), requires_grad=True)
+        self.coord_embed = args.coord_embed
+
+        self.conv1 = nn.Conv2d(args.n_channels, args.embed_dim - self.coord_embed, kernel_size=self.args.patch_size, stride=self.args.patch_size)  # Pixel Encoding
+        self.linear1 = nn.Linear(2, self.coord_embed)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, args.embed_dim), requires_grad=True)  # Cls Token
+        self.pos_embedding = nn.Parameter(torch.zeros(1, args.imageplanes + 1, args.embed_dim - self.coord_embed), requires_grad=True)  # Positional Embedding
+        self.coord_embedding = nn.Parameter(torch.zeros(1, args.imageplanes + 1, self.coord_embed), requires_grad=True)
 
     def forward(self, x, coords):
-        x = self.conv1(x)  # B C IH IW -> B E IH/P IW/P (Embedding the patches)
-        # x = x.reshape([x.shape[0], self.args.embed_dim, -1])  # B E IH/P IW/P -> B E S (Flattening the patches)
-        x = x.flatten(1).unsqueeze(0)
-        coord_emb = self.coord_embedding + coords.unsqueeze(0)
-        coord_emb = torch.cat((torch.zeros(1, 1, 2).to(coord_emb.device), coord_emb), dim=1)
+        # coords = torch.Size([32768, 9, 2])
+        x = self.conv1(x)  # B C IH IW -> B E IH/P IW/P (Embedding the patches) # torch.Size([32768, 94, 3, 3])
+        
+        x = x.reshape([x.shape[0], self.args.embed_dim - self.coord_embed, -1])  # B E IH/P IW/P -> B E S (Flattening the patches) torch.Size([32768, 94, 9])
+        x = x.transpose(1, 2) # B E S -> B S E  torch.Size([32768, 9, 94])
 
-        # x = x.transpose(1, 2)  # B E S -> B S E 
+        coords = coords.permute(1, 0, 2)
+        x = torch.cat((x, coords), dim=2)
+
+        
         x = torch.cat((torch.repeat_interleave(self.cls_token, x.shape[0], 0), x), dim=1)  # Adding classification token at the start of every sequence
-        x = x + self.pos_embedding  # Adding positional embedding
-        x = torch.cat((x, coord_emb), dim=2)  # Concatenate coordinate embeddings to the sequences
-
+        x[:, :, :self.args.embed_dim-self.coord_embed] = x[:, :, :self.args.embed_dim-self.coord_embed] + self.pos_embedding  # Adding positional embedding
+        x[:, :, self.args.embed_dim-self.coord_embed:] = x[:, :, self.args.embed_dim-self.coord_embed:] + self.coord_embedding
+        
         return x
 
 
@@ -97,7 +103,7 @@ class Classifier(nn.Module):
         super().__init__()
         self.fc1 = nn.Linear(args.embed_dim, args.embed_dim)
         self.activation = nn.Tanh()
-        self.fc2 = nn.Linear(args.embed_dim, 40)
+        self.fc2 = nn.Linear(args.embed_dim, 4)
 
     def forward(self, x):
         x = x[:, 0, :]  # Get CLS token

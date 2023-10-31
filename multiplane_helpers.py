@@ -1,50 +1,26 @@
 import torch
-import torchvision
+import math
 from vit import VisionTransformer
 
 INPUT_CONV_CH = 5
-PADDING = 10
+
 CROP_SIZE = 5
+PADDING = CROP_SIZE
 CROP_STEP = CROP_SIZE // 2
 
 class Args:
     def __init__(self) -> None:
         self.n_channels = 3
-        self.embed_dim = 700
+        self.embed_dim = 128 # 96 rgb, 32 coord
+        self.coord_embed = 2
         self.patch_size = CROP_SIZE
         self.img_size = None
         self.n_attention_heads = 4
         self.forward_mul = 2
         self.n_classes = None
         self.n_layers = 6
-
-# class ConvStage(torch.nn.Module):
-#     def __init__(self, input_size: int = 5, output_size: int = 500):
-#         super().__init__()
-#         self.input_size = input_size
-#         self.output_size = output_size
-
-#         self.block = torch.nn.Sequential(
-#             torch.nn.Conv2d(self.input_size, 8, (3, 3)),
-#             torch.nn.ReLU(),
-#             torch.nn.MaxPool2d((2, 2)),
-#             torch.nn.Conv2d(8, 16, (3, 3)),
-#             torch.nn.ReLU(),
-#             torch.nn.MaxPool2d((2, 2)),
-#             torch.nn.Conv2d(16, 32, (3, 3)),
-#             torch.nn.ReLU(),
-#         )
-#         self.l1 = torch.nn.Linear(32 * 9 * 9, 1024)  # 5184 -> 1024 -> 512 -> 500
-#         self.l2 = torch.nn.Linear(1024, 512)
-#         self.l3 = torch.nn.Linear(512, self.output_size)
-
-#     def forward(self, x):
-#         x = self.block(x)
-#         x = x.view(x.size(0), -1)
-#         x = self.l1(x)
-#         x = self.l2(x)
-#         x = self.l3(x)
-#         return x
+        self.imageplanes = None
+        
 
 
 class RenderNetwork(torch.nn.Module):
@@ -195,59 +171,29 @@ class ImagePlanes(torch.nn.Module):
         pixels = pixels.permute(0, 2, 1)
         coord_norm = coord_norm.permute(0, 2, 1)
 
-        feats = []
-        for img in range(self.image_plane.shape[0]):
-            image_plane = self.image_plane[img]
-            image_plane_border = torch.nn.functional.pad(
-                image_plane,
-                pad=(PADDING, PADDING, PADDING, PADDING),
-                mode="constant",
-                value=255,
-            )
-            coord = pixels[img]
-            coord_norm_img = coord_norm[img]
-            x = coord[:, 0] + PADDING - CROP_STEP
-            y = coord[:, 1] + PADDING - CROP_STEP
-            patches = []
-            for r in range(CROP_SIZE):
-                x_i = x + r
-                patches.append(
-                    torch.stack(
-                        [
-                            image_plane_border[:, x_i.long(), (y + c).long()].T
-                            for c in range(CROP_SIZE)
-                        ],
-                        dim=-1,
-                    )
-                )
-            
-            
-            patches = torch.stack(patches, dim=-2)
-            # torch_ones = torch.ones((coord.size(0), 1, CROP_SIZE, CROP_SIZE))
-            # for i in range(2):
-            #     patches = torch.cat((patches, torch_ones), dim=1)
-            #     patches[:, 3 + i, :, :] = patches[:, 3 + i, :, :] * coord_norm_img[
-            #         :, i
-            #     ].view(-1, 1, 1)
-            conv_out = transformer(patches, coord_norm_img)
-            feats.append(conv_out)
-        # img: (100, 32k, 5, 5, 3) # coord: (100, 32k, 2)
-        # img: (100, 32k, 96) coord: (100, 32k, 96)
-        # [8, 32768, 5, 5, 5]
-        feats = torch.stack(feats).squeeze(1)
-        # coord_norm_flat = coord_norm.reshape(coord_norm.size(0)*coord_norm.size(1), 2)
-        # feats = feats.reshape(feats.size(0)*feats.size(1), CROP_SIZE, CROP_SIZE, 3)
-        # feats = feats.permute(0, 3, 1, 2)
-        # feats = feats.permute(1, 0, 2, 3, 4)
-        # # TODO -> 10
-        # feats = feats.reshape(feats.size(0), 10, 10, 5, CROP_SIZE, CROP_SIZE)
-        # feats = feats.permute(0, 3, 1, 4, 2, 5)
-        # feats = feats.flatten(4)
-        # feats = feats.permute(0, 1, 4, 2, 3)
-        # feats = feats.flatten(3)
-        # 32k, 3, 5, 5
-        # for
-        # print(feats)
+        x = (pixels[:, :, 0] + PADDING - CROP_STEP)
+        y = (pixels[:, :, 1] + PADDING - CROP_STEP)
+        image_plane_border = torch.nn.functional.pad(self.image_plane, pad=(PADDING,PADDING,PADDING,PADDING), mode="constant", value=0).unsqueeze(2)  # 5 x 3 x 1 x 820 x 820
+        all_x = torch.arange(CROP_SIZE, device=x.device).reshape(1, 1, -1) + x.unsqueeze(2)  # 5 x 32768 x 5
+        all_y = torch.arange(CROP_SIZE, device=x.device).reshape(1, 1, -1) + y.unsqueeze(2)  # 5 x 32768 x 5
+
+        all_x = torch.repeat_interleave(all_x.unsqueeze(3), CROP_SIZE, dim=3)
+        all_y = torch.repeat_interleave(all_y.unsqueeze(2), CROP_SIZE, dim=2)
+        all_d = torch.zeros_like(all_x)
+
+        grid = torch.stack([all_y, all_x, all_d], dim=-1)  # 5 x 32768 x 5 x 5 x 3
+        grid = grid/image_plane_border.size(-1)*2-1
+        feats = torch.nn.functional.grid_sample(image_plane_border, grid, align_corners=True).transpose(1, 2)
+
+        feats = feats.permute(1, 0, 2, 3, 4)
+        mosaic_width = int(math.sqrt(self.image_plane.size(0)))
+        feats = feats.reshape(feats.size(0), mosaic_width, mosaic_width, 3, CROP_SIZE, CROP_SIZE)
+        feats = feats.permute(0, 3, 1, 4, 2, 5)
+        feats = feats.flatten(4)
+        feats = feats.permute(0, 1, 4, 2, 3)
+        feats = feats.flatten(3)
+        conv_out = transformer(feats, coord_norm)
+
 
         return conv_out
 
@@ -355,21 +301,18 @@ class MultiImageNeRF(torch.nn.Module):
     def __init__(self, image_plane, count, dir_count):
         super(MultiImageNeRF, self).__init__()
         self.image_plane = image_plane
-        self.render_network = RenderNetwork(count, dir_count)
         self.args = Args()
-        self.args.n_classes = 3 * count + count * 2
-        self.args.N_samples = 32
-        self.args.N_rand = 128
+        self.args.imageplanes = count
         self.transformer =  VisionTransformer(self.args)
         self.input_ch_views = dir_count
 
     def parameters(self):
-        return self.render_network.parameters()
+        return self.transformer.parameters()
 
     def forward(self, x):
         input_pts, input_views = torch.split(x, [3, self.input_ch_views], dim=-1)
         x = self.image_plane(input_pts, self.transformer)
-        return self.render_network(x, input_views)
+        return x
 
 
 class EmbeddedMultiImageNeRF(torch.nn.Module):

@@ -323,18 +323,18 @@ def create_mi_nerf(plane, args):
         ckpts = [os.path.join(basedir, expname, f) for f in sorted(os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
 
     print('Found ckpts', ckpts)
-    if len(ckpts) > 0 and not args.no_reload:
-        ckpt_path = ckpts[-1]
-        print('Reloading from', ckpt_path)
-        ckpt = torch.load(ckpt_path)
+    # if len(ckpts) > 0 and not args.no_reload:
+    #     ckpt_path = ckpts[-1]
+    #     print('Reloading from', ckpt_path)
+    #     ckpt = torch.load(ckpt_path)
 
-        start = ckpt['global_step']
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+    #     start = ckpt['global_step']
+    #     optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
-        # Load model
-        model.load_state_dict(ckpt['network_fn_state_dict'])
-        if model_fine is not None:
-            model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+    #     # Load model
+    #     model.load_state_dict(ckpt['network_fn_state_dict'])
+    #     if model_fine is not None:
+    #         model_fine.load_state_dict(ckpt['network_fine_state_dict'])
 
     ##########################
 
@@ -637,7 +637,7 @@ def config_parser():
     parser.add_argument("--divide_fac",   type=int, default=1, 
                         help='divide img size by this number')
     
-    parser.add_argument("--mi_count",   type=int, default=8, 
+    parser.add_argument("--mi_count",   type=int, default=100, 
                         help='mi count')
     # logger
     parser.add_argument("--neptune_project",  type=str, default=None, 
@@ -654,10 +654,10 @@ def train():
     
     # Logger
     run = None
-    # if args.neptune_project:
-    #     run = neptune.init_run(
-    #         project=args.neptune_project,
-    #     )
+    if args.neptune_project:
+        run = neptune.init_run(
+            project=args.neptune_project,
+        )
 
     # Load data
     K = None
@@ -951,6 +951,7 @@ def train():
         if (i%args.i_testset==0):
             testsavedir = os.path.join(basedir, expname, 'testset_metrics_{:06d}'.format(i))
             os.makedirs(testsavedir, exist_ok=True)
+            i_test = i_test[:2]
             print('test poses shape', poses[i_test].shape)
             with torch.no_grad():
                 render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir, calculate_metrics=True, logger=run)
