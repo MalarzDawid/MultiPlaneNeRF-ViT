@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+from run_nerf_helpers import get_embedder
 # B -> Batch Size
 # C -> Number of Input Channels
 # IH -> Image Height
@@ -14,35 +14,52 @@ import torch.nn as nn
 # H -> Number of heads
 # HE -> Head Embedding Dimension = E/H
 
+dimension = None
+
 
 class EmbedLayer(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
         self.coord_embed = args.coord_embed
-
-        self.conv1 = nn.Conv2d(args.n_channels, args.embed_dim - self.coord_embed, kernel_size=self.args.patch_size, stride=self.args.patch_size)  # Pixel Encoding
-        self.linear1 = nn.Linear(2, self.coord_embed)
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, args.embed_dim), requires_grad=True)  # Cls Token
-        self.pos_embedding = nn.Parameter(torch.zeros(1, args.imageplanes + 1, args.embed_dim - self.coord_embed), requires_grad=True)  # Positional Embedding
-        self.coord_embedding = nn.Parameter(torch.zeros(1, args.imageplanes + 1, self.coord_embed), requires_grad=True)
+        n_freq = 1
+        self.embed_fn, self.input_ch = get_embedder(n_freq, 0)
+        self.conv1 = nn.Conv2d(args.n_channels, n_freq, kernel_size=self.args.patch_size, stride=self.args.patch_size)  # Pixel Encoding
+        self.cls_token = nn.Parameter(torch.zeros(9216, 1), requires_grad=True)  # Cls Token
+        self.pos_embedding = nn.Parameter(torch.zeros(1, args.imageplanes + 1, n_freq), requires_grad=True)  # Positional Embedding
+        # self.coord_embedding = nn.Parameter(torch.zeros(1, args.imageplanes + 1, self.coord_embed), requires_grad=True)
 
     def forward(self, x, coords):
-        # coords = torch.Size([32768, 9, 2])
-        x = self.conv1(x)  # B C IH IW -> B E IH/P IW/P (Embedding the patches) # torch.Size([32768, 94, 3, 3])
+        global dimension
+        # # coords = torch.Size([32768, 9, 2])
+        # x = self.conv1(x)  # B C IH IW -> B E IH/P IW/P (Embedding the patches) # torch.Size([32768, 94, 3, 3])
         
-        x = x.reshape([x.shape[0], self.args.embed_dim - self.coord_embed, -1])  # B E IH/P IW/P -> B E S (Flattening the patches) torch.Size([32768, 94, 9])
-        x = x.transpose(1, 2) # B E S -> B S E  torch.Size([32768, 9, 94])
+        # x = x.reshape([x.shape[0], self.args.embed_dim - self.coord_embed, -1])  # B E IH/P IW/P -> B E S (Flattening the patches) torch.Size([32768, 94, 9])
+        # x = x.transpose(1, 2) # B E S -> B S E  torch.Size([32768, 9, 94])
 
-        coords = coords.permute(1, 0, 2)
-        x = torch.cat((x, coords), dim=2)
+        # coords = coords.permute(1, 0, 2)
+        # x = torch.cat((x, coords), dim=2)
 
         
-        x = torch.cat((torch.repeat_interleave(self.cls_token, x.shape[0], 0), x), dim=1)  # Adding classification token at the start of every sequence
-        x[:, :, :self.args.embed_dim-self.coord_embed] = x[:, :, :self.args.embed_dim-self.coord_embed] + self.pos_embedding  # Adding positional embedding
-        x[:, :, self.args.embed_dim-self.coord_embed:] = x[:, :, self.args.embed_dim-self.coord_embed:] + self.coord_embedding
+        # x = torch.cat((torch.repeat_interleave(self.cls_token, x.shape[0], 0), x), dim=1)  # Adding classification token at the start of every sequence
+        # x[:, :, :self.args.embed_dim-self.coord_embed] = x[:, :, :self.args.embed_dim-self.coord_embed] + self.pos_embedding  # Adding positional embedding
+        # x[:, :, self.args.embed_dim-self.coord_embed:] = x[:, :, self.args.embed_dim-self.coord_embed:] + self.coord_embedding
         
-        return x
+        # TO DO: Add positional encoding
+        coords_flat = torch.reshape(coords, [-1, coords.shape[-1]])
+        patches_flat = torch.reshape(x, [-1, 3*self.args.patch_size*self.args.patch_size]) # (9216, ???)
+        # cls_token_flat = torch.reshape(self.cls_token, [-1, self.cls_token.shape[-1]])
+        
+        embedded = self.embed_fn(torch.cat((coords_flat, patches_flat, self.cls_token), dim=1)) # (13k, 512)
+
+        embedded = embedded.unsqueeze(1) # batch_size
+        # embedded = torch.cat((torch.repeat_interleave(self.cls_token, embedded.shape[0], 0), embedded), dim=1)
+        # dimension = embedded.shape[-1]
+        # (1024, 1, emb)
+        # (1, 9k, emb) -> (1024, 1)
+        # (batch_size, rest, emb)
+        embedded = embedded.reshape(1024, 9, -1)
+        return embedded
 
 
 
@@ -58,7 +75,19 @@ class SelfAttention(nn.Module):
         self.values = nn.Linear(self.embed_dim, self.head_embed_dim * self.n_attention_heads, bias=True)
 
     def forward(self, x):
-        m, s, e = x.shape
+        # B -> Batch Size
+        # C -> Number of Input Channels
+        # IH -> Image Height
+        # IW -> Image Width
+        # P -> Patch Size
+        # E -> Embedding Dimension
+        # S -> Sequence Length = IH/P * IW/P
+        # Q -> Query Sequence length
+        # K -> Key Sequence length
+        # V -> Value Sequence length (same as Key length)
+        # H -> Number of heads
+        # HE -> Head Embedding Dimension = E/H
+        m, s, e = x.shape # (batch_size, patch_size, emb)
 
         xq = self.queries(x).reshape(m, s, self.n_attention_heads, self.head_embed_dim)  # B, Q, E -> B, Q, H, HE
         xq = xq.transpose(1, 2)  # B, Q, H, HE -> B, H, Q, HE
@@ -122,6 +151,7 @@ class VisionTransformer(nn.Module):
         self.classifier = Classifier(args)
 
     def forward(self, x, coords):
+        global dimension
         x = self.embedding(x, coords)
         x = self.encoder(x)
         x = self.norm(x)

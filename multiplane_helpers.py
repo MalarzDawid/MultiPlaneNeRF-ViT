@@ -11,11 +11,11 @@ CROP_STEP = CROP_SIZE // 2
 class Args:
     def __init__(self) -> None:
         self.n_channels = 3
-        self.embed_dim = 128 # 96 rgb, 32 coord
+        self.embed_dim = 234
         self.coord_embed = 2
         self.patch_size = CROP_SIZE
         self.img_size = None
-        self.n_attention_heads = 4
+        self.n_attention_heads = 2
         self.forward_mul = 2
         self.n_classes = None
         self.n_layers = 6
@@ -185,13 +185,13 @@ class ImagePlanes(torch.nn.Module):
         grid = grid/image_plane_border.size(-1)*2-1
         feats = torch.nn.functional.grid_sample(image_plane_border, grid, align_corners=True).transpose(1, 2)
 
-        feats = feats.permute(1, 0, 2, 3, 4)
-        mosaic_width = int(math.sqrt(self.image_plane.size(0)))
-        feats = feats.reshape(feats.size(0), mosaic_width, mosaic_width, 3, CROP_SIZE, CROP_SIZE)
-        feats = feats.permute(0, 3, 1, 4, 2, 5)
-        feats = feats.flatten(4)
-        feats = feats.permute(0, 1, 4, 2, 3)
-        feats = feats.flatten(3)
+        feats = feats.permute(1, 0, 2, 3, 4) # (1024, 9, 3, 5, 5)
+        # mosaic_width = int(math.sqrt(self.image_plane.size(0)))
+        # feats = feats.reshape(feats.size(0), mosaic_width, mosaic_width, 3, CROP_SIZE, CROP_SIZE)
+        # feats = feats.permute(0, 3, 1, 4, 2, 5)
+        # feats = feats.flatten(4)
+        # feats = feats.permute(0, 1, 4, 2, 3)
+        # feats = feats.flatten(3)
         conv_out = transformer(feats, coord_norm)
 
 

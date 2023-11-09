@@ -1,4 +1,4 @@
-expname = conv_10k_5kernel_5patch_
+expname = test
 basedir = ./logs
 datadir = ./data/nerf_synthetic/lego
 dataset_type = blender
@@ -15,10 +15,12 @@ N_rand = 1024
 
 precrop_iters = 750
 precrop_frac = 0.5
+mi_count = 9
 
 half_res = False
 i_weights = 1000
-i_testset = 1000
-epochs = 2000
-neptune_project = gmum-malarz/MultiPlaneNeRF-ViT
-
+i_testset = 5000
+epochs = 20000
+lrate = 5e-4
+netchunk = 1024
+chunk = 1024
